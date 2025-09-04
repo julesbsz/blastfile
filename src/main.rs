@@ -7,7 +7,7 @@ use axum::extract::{State, Path};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Router;
-use axum::routing::put;
+use axum::routing::{get, put};
 use futures_util::StreamExt;
 use regex::Regex;
 use tower_http::services::ServeDir;
@@ -41,7 +41,7 @@ fn normalize_base_url(var: String, bind: SocketAddr) -> String {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-    
+
     let bind_addr: SocketAddr = env::var("BIND")
         .unwrap_or_else(|_| "0.0.0.0:8080".into())
         .parse()
@@ -72,6 +72,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let app = Router::new()
+        .route("/health", get(|| async { "ok" }))
         .route("/{filename}", put(upload))
         .nest_service("/files", ServeDir::new(app_state.data_dir.as_ref()))
         .with_state(app_state);
