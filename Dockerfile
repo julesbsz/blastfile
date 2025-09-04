@@ -48,7 +48,7 @@ USER appuser
 EXPOSE 8080
 
 # Healthcheck
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8080/health || exit 1
 
 ENTRYPOINT ["/app/server"]
