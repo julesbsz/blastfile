@@ -126,7 +126,6 @@ dependencies = [
  "anyhow",
  "axum",
  "futures-util",
- "http-body-util",
  "regex",
  "tokio",
  "tower-http",

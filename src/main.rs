@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::{State, Path};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::Router;
 use axum::routing::put;
@@ -57,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
 async fn upload(
     State(st): State<AppState>,
     Path(filename): Path<String>,
+    headers: HeaderMap,
     body: Body,
 ) -> Result<Response, (StatusCode, &'static str)> {
     // Sanitize filename
@@ -89,14 +90,41 @@ async fn upload(
 
     tokio::fs::rename(&tmp_path, &dest_path).await.map_err(internal_err)?;
 
+    // Construct wget url
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("http");
+
+    let host = headers
+        .get("x-forwarded-host")            // privilégié si derrière un proxy
+        .or_else(|| headers.get(header::HOST))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("localhost:8080");
+
+    let path = format!("/files/{}", &filename);
+    let full_url = format!("{scheme}://{host}{path}");
+    let wget_cmd = format!("wget {}", sh_quote(&full_url));
+
     // Response
-    let url = format!("/files/{}", &filename);
     Ok((
         StatusCode::CREATED,
-        [(header::LOCATION, HeaderValue::from_str(&url).unwrap())],
-        format!("Upload successful: {url} ({} bytes)", written),
+        [
+            (header::LOCATION, HeaderValue::from_str(&path).unwrap()),
+            (header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8")),
+        ],
+        format!("Upload OK\nwget: {wget_cmd}\nsize: {written} bytes\n"),
     ).into_response())
 }
+
+fn sh_quote(s: &str) -> String {
+    if s.chars().all(|c| c.is_ascii_alphanumeric() || "-_./:@%".contains(c)) {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
+    }
+}
+
 
 // Map internal errors as 500
 fn internal_err<E: std::fmt::Debug>(_: E) -> (StatusCode, &'static str) {
