@@ -19,7 +19,23 @@ struct AppState {
     data_dir: Arc<PathBuf>,
     max_bytes: u64,
     filename_regex: Arc<Regex>,
+    public_base_url: Arc<String>,
 }
+
+fn normalize_base_url(var: String, bind: SocketAddr) -> String {
+    let trimmed = var.trim();
+    if trimmed.is_empty() {
+        // fallback: http://localhost:<port>
+        return format!("http://localhost:{}", bind.port());
+    }
+    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("https://{}", trimmed)
+    };
+    with_scheme.trim_end_matches('/').to_string()
+}
+
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -29,6 +45,12 @@ async fn main() -> anyhow::Result<()> {
         .expect("Invalid bind address");
 
     let data_dir = PathBuf::from(env::var("DATA_DIR").unwrap_or_else(|_| "./data".into()));
+
+    let public_base_url = normalize_base_url(
+        env::var("PUBLIC_BASE_URL").unwrap_or_default(),
+        bind_addr,
+    );
+
     let max_bytes: u64 = env::var("MAX_BYTES")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -40,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
         data_dir: Arc::new(data_dir),
         max_bytes,
         filename_regex: Arc::new(Regex::new(r"^[A-Za-z0-9._-]{1,200}$")?),
+        public_base_url: Arc::new(public_base_url),
     };
 
     let app = Router::new()
@@ -97,13 +120,13 @@ async fn upload(
         .unwrap_or("http");
 
     let host = headers
-        .get("x-forwarded-host")            // privilégié si derrière un proxy
+        .get("x-forwarded-host")
         .or_else(|| headers.get(header::HOST))
         .and_then(|v| v.to_str().ok())
         .unwrap_or("localhost:8080");
 
     let path = format!("/files/{}", &filename);
-    let full_url = format!("{scheme}://{host}{path}");
+    let full_url = format!("{}/files/{}", st.public_base_url, &filename);
     let wget_cmd = format!("wget {}", sh_quote(&full_url));
 
     // Response
@@ -113,7 +136,9 @@ async fn upload(
             (header::LOCATION, HeaderValue::from_str(&path).unwrap()),
             (header::CONTENT_TYPE, HeaderValue::from_static("text/plain; charset=utf-8")),
         ],
-        format!("Upload OK\nwget: {wget_cmd}\nsize: {written} bytes\n"),
+        format!(
+            "Upload OK\nwget: {wget_cmd}\nsize: {written} bytes\n"
+        ),
     ).into_response())
 }
 
@@ -124,7 +149,6 @@ fn sh_quote(s: &str) -> String {
         format!("'{}'", s.replace('\'', r"'\''"))
     }
 }
-
 
 // Map internal errors as 500
 fn internal_err<E: std::fmt::Debug>(_: E) -> (StatusCode, &'static str) {
