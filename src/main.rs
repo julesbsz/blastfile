@@ -20,6 +20,7 @@ struct AppState {
     max_bytes: u64,
     filename_regex: Arc<Regex>,
     public_base_url: Arc<String>,
+    upload_password: Option<String>,
 }
 
 fn normalize_base_url(var: String, bind: SocketAddr) -> String {
@@ -39,6 +40,8 @@ fn normalize_base_url(var: String, bind: SocketAddr) -> String {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
+    
     let bind_addr: SocketAddr = env::var("BIND")
         .unwrap_or_else(|_| "0.0.0.0:8080".into())
         .parse()
@@ -56,6 +59,8 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(1024 * 1024 * 1024); // 1 GiB by default
 
+    let upload_password = env::var("UPLOAD_PASSWORD").ok().filter(|s| !s.is_empty());
+
     tokio::fs::create_dir_all(&data_dir).await?; // Create upload dir
 
     let app_state = AppState {
@@ -63,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
         max_bytes,
         filename_regex: Arc::new(Regex::new(r"^[A-Za-z0-9._-]{1,200}$")?),
         public_base_url: Arc::new(public_base_url),
+        upload_password,
     };
 
     let app = Router::new()
@@ -83,6 +89,16 @@ async fn upload(
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response, (StatusCode, &'static str)> {
+    // Password check (optional)
+    if let Some(expected) = st.upload_password.as_deref() {
+        let got = headers
+            .get("x-upload-password")
+            .and_then(|v| v.to_str().ok());
+        if got != Some(expected) {
+            return Err((StatusCode::UNAUTHORIZED, "Invalid or missing password"));
+        }
+    }
+
     // Sanitize filename
     if !st.filename_regex.is_match(&filename) {
         return Err((StatusCode::BAD_REQUEST, "Invalid filename"));
@@ -112,18 +128,6 @@ async fn upload(
     drop(file);
 
     tokio::fs::rename(&tmp_path, &dest_path).await.map_err(internal_err)?;
-
-    // Construct wget url
-    let scheme = headers
-        .get("x-forwarded-proto")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("http");
-
-    let host = headers
-        .get("x-forwarded-host")
-        .or_else(|| headers.get(header::HOST))
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost:8080");
 
     let path = format!("/files/{}", &filename);
     let full_url = format!("{}/files/{}", st.public_base_url, &filename);
