@@ -6,17 +6,14 @@
 FROM rust:1-bookworm AS builder
 WORKDIR /app
 
-# Optional: system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates pkg-config && rm -rf /var/lib/apt/lists/*
 
-# Improve cache: build “empty” with just the manifests
 ARG BIN=blastfile
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo "fn main(){}" > src/main.rs
 RUN cargo build --release && rm -rf src
 
-# Build
 COPY src ./src
 RUN cargo build --release
 
@@ -26,29 +23,24 @@ RUN cargo build --release
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 
-# Min Tools (curl for HEALTHCHECK) + certificates
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates wget && rm -rf /var/lib/apt/lists/*
+    ca-certificates wget gosu && rm -rf /var/lib/apt/lists/*
 
-# non-root user
 RUN useradd -u 10001 -m appuser
 
-# Default variables
 ENV BIND=0.0.0.0:8080 \
     DATA_DIR=/data
 
-# Binary
 ARG BIN=blastfile
 COPY --from=builder /app/target/release/${BIN} /app/server
 
-# data file
-RUN mkdir -p /data && chown -R appuser:appuser /data /app
-USER appuser
+RUN printf '#!/bin/sh\nset -e\nmkdir -p "$DATA_DIR"\nchown -R appuser:appuser "$DATA_DIR" || true\nexec gosu appuser /app/server\n' > /entrypoint.sh \
+ && chmod +x /entrypoint.sh
 
 EXPOSE 8080
 
-# Fake healthcheck
-HEALTHCHECK --interval=30s --timeout=3s --start-period=1s --retries=1 \
-  CMD ["/bin/true"]
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1
 
-ENTRYPOINT ["/app/server"]
+ENTRYPOINT ["/entrypoint.sh"]
