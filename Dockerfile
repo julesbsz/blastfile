@@ -28,7 +28,7 @@ WORKDIR /app
 
 # Min Tools (curl for HEALTHCHECK) + certificates
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl && rm -rf /var/lib/apt/lists/*
+    ca-certificates wget && rm -rf /var/lib/apt/lists/*
 
 # non-root user
 RUN useradd -u 10001 -m appuser
@@ -48,6 +48,7 @@ USER appuser
 EXPOSE 8080
 
 # Healthcheck
-HEALTHCHECK NONE
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health"]
 
 ENTRYPOINT ["/app/server"]
