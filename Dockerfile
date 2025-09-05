@@ -47,7 +47,8 @@ USER appuser
 
 EXPOSE 8080
 
-# Healthcheck
-HEALTHCHECK NONE
+# Fake healthcheck
+HEALTHCHECK --interval=30s --timeout=3s --start-period=1s --retries=1 \
+  CMD ["/bin/true"]
 
 ENTRYPOINT ["/app/server"]
