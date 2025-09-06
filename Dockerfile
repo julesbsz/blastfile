@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.7
 
 ########################
 # Build stage
@@ -7,15 +7,18 @@ FROM rust:1-bookworm AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates pkg-config && rm -rf /var/lib/apt/lists/*
+    pkg-config ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-ARG BIN=blastfile
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src && echo "fn main(){}" > src/main.rs
-RUN cargo build --release && rm -rf src
+RUN mkdir -p src && echo "fn main(){}" > src/main.rs
+RUN cargo build --release --locked && rm -rf target/release/deps/* src
 
 COPY src ./src
-RUN cargo build --release
+RUN cargo build --release --locked
+
+RUN strip target/release/blastfile || true
+
 
 ########################
 # Runtime stage
@@ -24,23 +27,31 @@ FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates wget gosu && rm -rf /var/lib/apt/lists/*
+    ca-certificates wget tini && \
+    rm -rf /var/lib/apt/lists/*
 
-RUN useradd -u 10001 -m appuser
+RUN useradd -u 10001 -m -d /nonexistent -s /usr/sbin/nologin appuser
+
+ENV DATA_DIR=/data
+RUN mkdir -p "${DATA_DIR}" && chown 10001:10001 "${DATA_DIR}"
 
 ENV BIND=0.0.0.0:8080 \
-    DATA_DIR=/data
+    RUST_LOG=info
 
-ARG BIN=blastfile
-COPY --from=builder /app/target/release/${BIN} /app/server
-
-RUN printf '#!/bin/sh\nset -e\nmkdir -p "$DATA_DIR"\nchown -R appuser:appuser "$DATA_DIR" || true\nexec gosu appuser /app/server\n' > /entrypoint.sh \
- && chmod +x /entrypoint.sh
+COPY --from=builder /app/target/release/blastfile /app/server
 
 EXPOSE 8080
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+  CMD wget -qO- "http://127.0.0.1:${PORT:-8080}/health" || exit 1
 
-ENTRYPOINT ["/entrypoint.sh"]
+LABEL org.opencontainers.image.title="blastfile" \
+      org.opencontainers.image.description="A lightweight, self-hosted file transfer service built in Rust" \
+      org.opencontainers.image.source="." \
+      org.opencontainers.image.licenses="MIT"
+
+USER 10001:10001
+
+ENTRYPOINT ["/usr/bin/tini","--"]
+
+CMD ["/app/server"]

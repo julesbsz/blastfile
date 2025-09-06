@@ -41,6 +41,7 @@ fn normalize_base_url(var: String, bind: SocketAddr) -> String {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
+    eprintln!("Starting blastfile with BIND={:?}", env::var("BIND"));
 
     let bind_addr: SocketAddr = env::var("BIND")
         .unwrap_or_else(|_| "0.0.0.0:8080".into())
